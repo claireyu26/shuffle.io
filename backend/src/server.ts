@@ -1,5 +1,5 @@
 import Fastify from 'fastify';
-import { Server as SocketIOServer, Socket } from 'socket.io';
+import socketio from 'fastify-socket.io';
 import Redis from 'ioredis';
 import { createAdapter } from '@socket.io/redis-adapter';
 import { RoomState, Player } from '../../shared/types';
@@ -18,34 +18,104 @@ fastify.get('/health', async (request, reply) => {
     return { status: 'ok' };
 });
 
-// Initialize Socket.io
-const io = new SocketIOServer(fastify.server, {
-    cors: {
-        origin: (origin, callback) => {
-            const allowedOrigins = [
-                /^http:\/\/localhost:\d+$/,
-                /https?:\/\/.*\.railway\.app$/,
-                /https?:\/\/shuffle-frontend.*\.railway\.app$/
-            ];
+// 1. Declare io at top level (type will be any or from the plugin)
+let io: any;
 
-            if (!origin || allowedOrigins.some(regex => regex.test(origin))) {
-                callback(null, true);
-            } else {
-                callback(new Error('Not allowed by CORS'));
-            }
-        },
+// Register the plugin
+fastify.register(socketio, {
+    cors: {
+        origin: ["https://shuffle-frontend-production-511c.up.railway.app", "http://localhost:3000"],
         methods: ["GET", "POST"],
         credentials: true
     },
-    pingInterval: 25000,
-    pingTimeout: 60000,
-    connectionStateRecovery: {
-        // the backup duration of the sessions and the packets
-        maxDisconnectionDuration: 2 * 60 * 1000,
-        // whether to skip middlewares upon successful recovery
-        skipMiddlewares: true,
-    }
+    transports: ['websocket'] // Force websocket for Railway stability
 });
+
+// Move handlers to a function
+const setupSocketHandlers = (ioServer: any) => {
+    if (!ioServer) return;
+    ioServer.on('connection', (socket: any) => {
+        console.log(`Socket connected: ${socket.id}`);
+
+        socket.on('join_room', async ({ roomId, nickname, playerId }: { roomId: string, nickname: string, playerId?: string }) => {
+            const actualPlayerId = playerId || uuidv4();
+            socket.data.playerId = actualPlayerId;
+            socket.data.roomId = roomId;
+            socket.join(roomId);
+
+            if (!roomActors[roomId]) {
+                const actor = createActor(gameMachine, { input: { roomId } });
+                actor.subscribe(() => {
+                    syncState(roomId);
+                });
+                actor.start();
+                roomActors[roomId] = actor;
+            }
+
+            const actor = roomActors[roomId];
+            const player: Player = {
+                id: actualPlayerId,
+                name: nickname,
+                tiles: 1000,
+                holeCards: [],
+                isFolded: false,
+                isSpectator: false,
+                position: 0
+            };
+
+            const existing = actor.getSnapshot().context.players.find(p => p.id === actualPlayerId);
+            if (!existing) {
+                actor.send({ type: 'JOIN_ROOM', player });
+            } else {
+                if (disconnectTimers[actualPlayerId]) {
+                    clearTimeout(disconnectTimers[actualPlayerId]);
+                    delete disconnectTimers[actualPlayerId];
+                }
+            }
+
+            socket.emit('joined_room', { roomId, playerId: actualPlayerId });
+            syncState(roomId);
+        });
+
+        socket.on('start_game', () => {
+            const { roomId, playerId } = socket.data;
+            if (roomActors[roomId]) {
+                roomActors[roomId].send({ type: 'START_GAME', playerId });
+            }
+        });
+
+        socket.on('send_intent', ({ type, amount }: { type: 'COMMIT' | 'FOLD' | 'CHECK' | 'PASS', amount?: number }) => {
+            const { roomId, playerId } = socket.data;
+            if (roomActors[roomId]) {
+                if (type === 'COMMIT') roomActors[roomId].send({ type: 'COMMIT', playerId, amount: amount || 0 });
+                if (type === 'FOLD') roomActors[roomId].send({ type: 'FOLD', playerId });
+                if (type === 'CHECK') roomActors[roomId].send({ type: 'CHECK', playerId });
+                if (type === 'PASS') roomActors[roomId].send({ type: 'PASS_ACTION', playerId });
+            }
+        });
+
+        socket.on('disconnect', () => {
+            const { roomId, playerId } = socket.data;
+            console.log(`Socket disconnected: ${socket.id}`);
+            if (playerId && roomId) {
+                disconnectTimers[playerId] = setTimeout(async () => {
+                    console.log(`Grace period expired for ${playerId}`);
+                    const actor = roomActors[roomId];
+                    if (actor) {
+                        actor.send({ type: 'DISCONNECT', playerId });
+                    }
+                    const state = await getRoomState(roomId);
+                    if (state) {
+                        state.players = state.players.filter(p => p.id !== playerId);
+                        await saveRoomState(roomId, state);
+                        syncState(roomId);
+                    }
+                    delete disconnectTimers[playerId];
+                }, 60000);
+            }
+        });
+    });
+};
 
 // Store Abstraction
 interface GameStore {
@@ -77,10 +147,8 @@ const setupInfrastructure = async () => {
         }
     });
 
-    // Prevent crash on connection error
     redisClient.on('error', (err) => {
         // Suppress unhandled error event
-        // console.warn('Redis Client Error', err.message); 
     });
 
     try {
@@ -88,12 +156,13 @@ const setupInfrastructure = async () => {
         console.log('Redis connected successfully.');
         const pubClient = redisClient;
         const subClient = redisClient.duplicate();
-        io.adapter(createAdapter(pubClient, subClient));
         store = new RedisStore(redisClient);
         console.log('Using Redis Store');
+        return { pubClient, subClient };
     } catch (err) {
         console.warn('Redis unavailable, falling back to Memory Store.');
         store = new MemoryStore();
+        return { pubClient: null, subClient: null };
     }
 };
 
@@ -153,103 +222,32 @@ const syncState = async (roomId: string) => {
 
 const disconnectTimers: Record<string, NodeJS.Timeout> = {};
 
-io.on('connection', (socket: Socket) => {
-    console.log(`Socket connected: ${socket.id}`);
-
-    socket.on('join_room', async ({ roomId, nickname, playerId }: { roomId: string, nickname: string, playerId?: string }) => {
-        const actualPlayerId = playerId || uuidv4();
-        socket.data.playerId = actualPlayerId;
-        socket.data.roomId = roomId;
-        socket.join(roomId);
-
-        // Initialize Actor if not exists
-        if (!roomActors[roomId]) {
-            // Try to load from Store logic could go here
-            // Note: If store has state, we should probably restore it into the actor? 
-            // For MVP, we just create new actor if not in memory.
-            const actor = createActor(gameMachine, { input: { roomId } });
-            actor.subscribe(() => {
-                syncState(roomId);
-            });
-            actor.start();
-            roomActors[roomId] = actor;
-        }
-
-        const actor = roomActors[roomId];
-        const player: Player = {
-            id: actualPlayerId,
-            name: nickname,
-            tiles: 1000,
-            holeCards: [],
-            isFolded: false,
-            isSpectator: false,
-            position: 0
-        };
-
-        // Check if player already in context
-        const existing = actor.getSnapshot().context.players.find(p => p.id === actualPlayerId);
-        if (!existing) {
-            actor.send({ type: 'JOIN_ROOM', player });
-        } else {
-            // Reconnected logic
-            if (disconnectTimers[actualPlayerId]) {
-                clearTimeout(disconnectTimers[actualPlayerId]);
-                delete disconnectTimers[actualPlayerId];
-            }
-        }
-
-        socket.emit('joined_room', { roomId, playerId: actualPlayerId });
-        syncState(roomId);
-    });
-
-    socket.on('start_game', () => {
-        const { roomId, playerId } = socket.data;
-        if (roomActors[roomId]) {
-            roomActors[roomId].send({ type: 'START_GAME', playerId });
-        }
-    });
-
-    socket.on('send_intent', ({ type, amount }: { type: 'COMMIT' | 'FOLD' | 'CHECK' | 'PASS', amount?: number }) => {
-        const { roomId, playerId } = socket.data;
-        if (roomActors[roomId]) {
-            if (type === 'COMMIT') roomActors[roomId].send({ type: 'COMMIT', playerId, amount: amount || 0 });
-            if (type === 'FOLD') roomActors[roomId].send({ type: 'FOLD', playerId });
-            if (type === 'CHECK') roomActors[roomId].send({ type: 'CHECK', playerId });
-            if (type === 'PASS') roomActors[roomId].send({ type: 'PASS_ACTION', playerId });
-        }
-    });
-
-    socket.on('disconnect', () => {
-        const { roomId, playerId } = socket.data;
-        console.log(`Socket disconnected: ${socket.id}`);
-        if (playerId && roomId) {
-            disconnectTimers[playerId] = setTimeout(async () => {
-                console.log(`Grace period expired for ${playerId}`);
-                const actor = roomActors[roomId];
-                if (actor) {
-                    actor.send({ type: 'DISCONNECT', playerId }); // Machine should handle cleanup if needed
-                }
-                // Cleanup fallback
-                const state = await getRoomState(roomId);
-                if (state) {
-                    state.players = state.players.filter(p => p.id !== playerId);
-                    await saveRoomState(roomId, state);
-                    syncState(roomId);
-                }
-                delete disconnectTimers[playerId];
-            }, 60000);
-        }
-    });
-});
+// Handlers moved to setupSocketHandlers function above
 
 const start = async () => {
     try {
-        await setupInfrastructure();
+        const { pubClient, subClient } = await setupInfrastructure();
+
+        // Start listening FIRST
         await fastify.listen({ port: PORT, host: '0.0.0.0' });
-        console.log(`Server running on port ${PORT}`);
+
+        // Wait for fastify to be ready (ensures socket.io is initialized)
+        await fastify.ready();
+
+        // Access io via fastify.io (cast to any for TS)
+        io = (fastify as any).io;
+
+        // 4. Redis Adapter setup AFTER io exists
+        if (pubClient && subClient && io) {
+            io.adapter(createAdapter(pubClient, subClient));
+        }
+
+        // 3. Setup Handlers
+        setupSocketHandlers(io);
+
+        console.log(`🚀 Server confirmed on port ${PORT}`);
     } catch (err) {
-        console.error('Failed to start server:', err);
-        fastify.log.error(err);
+        console.error('Failed to start:', err);
         process.exit(1);
     }
 };
