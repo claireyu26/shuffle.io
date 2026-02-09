@@ -17,7 +17,7 @@ export * from '../types';
 
 // Hook
 
-const BACKEND_URL = 'http://localhost:3001';
+const BACKEND_URL = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:3001';
 
 export const useShufle = (roomId: string) => {
     const [socket, setSocket] = useState<Socket | null>(null);
@@ -29,6 +29,7 @@ export const useShufle = (roomId: string) => {
         // Init socket
         const socketIo = io(BACKEND_URL, {
             transports: ['websocket'], // force websocket
+            secure: true,
             reconnection: true,
             reconnectionAttempts: Infinity,
             reconnectionDelay: 1000,

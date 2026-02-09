@@ -21,8 +21,21 @@ fastify.get('/health', async (request, reply) => {
 // Initialize Socket.io
 const io = new SocketIOServer(fastify.server, {
     cors: {
-        origin: "*", // Allow all for MVP
-        methods: ["GET", "POST"]
+        origin: (origin, callback) => {
+            const allowedOrigins = [
+                /^http:\/\/localhost:\d+$/,
+                /https?:\/\/.*\.railway\.app$/,
+                /https?:\/\/shuffle-frontend.*\.railway\.app$/
+            ];
+
+            if (!origin || allowedOrigins.some(regex => regex.test(origin))) {
+                callback(null, true);
+            } else {
+                callback(new Error('Not allowed by CORS'));
+            }
+        },
+        methods: ["GET", "POST"],
+        credentials: true
     },
     pingInterval: 25000,
     pingTimeout: 60000,
