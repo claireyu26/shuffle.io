@@ -11,7 +11,6 @@ export default function Home() {
   const [roomIdInput, setRoomIdInput] = useState("room1"); // Default room for dev
   const [nicknameInput, setNicknameInput] = useState("");
   const {
-    socket,
     isConnected,
     roomState,
     playerId,
@@ -19,6 +18,7 @@ export default function Home() {
     startGame,
     sendIntent
   } = useShufle(roomIdInput);
+
 
   const isInGame = roomState && roomState.players.some(p => p.id === playerId);
 

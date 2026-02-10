@@ -15,85 +15,88 @@ export * from '../types';
 
 
 
+import { socket } from '../lib/socket';
+
 // Hook
-
-const BACKEND_URL = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:3001';
-
 export const useShufle = (roomId: string) => {
-    const [socket, setSocket] = useState<Socket | null>(null);
-    const [isConnected, setIsConnected] = useState(false);
+    const [isConnected, setIsConnected] = useState(socket.connected);
     const [roomState, setRoomState] = useState<RoomState | null>(null);
     const [playerId, setPlayerId] = useState<string | null>(null);
 
     useEffect(() => {
-        // Init socket
-        const socketIo = io(BACKEND_URL, {
-            transports: ['websocket'], // force websocket
-            secure: true,
-            reconnection: true,
-            reconnectionAttempts: Infinity,
-            reconnectionDelay: 1000,
-            reconnectionDelayMax: 5000,
-        });
-
-        socketIo.on('connect', () => {
-            console.log('Connected to Shufle Backend');
+        const onConnect = () => {
+            console.log('✅ socket connected', socket.id);
             setIsConnected(true);
 
             // Auto-join if existing session
             const storedNickname = localStorage.getItem('shufle_nickname');
             const storedPlayerId = localStorage.getItem('shufle_playerId');
 
-            if (storedNickname && roomId) {
-                socketIo.emit('join_room', {
+            if (storedNickname && roomId && socket.connected) {
+                socket.emit('join_room', {
                     roomId,
                     nickname: storedNickname,
-                    playerId: storedPlayerId // Reconnect with ID
+                    playerId: storedPlayerId
                 });
             }
-        });
+        };
 
-        socketIo.on('disconnect', () => {
-            console.log('Disconnected from Shufle Backend');
+        const onDisconnect = () => {
+            console.log('❌ socket disconnected');
             setIsConnected(false);
-        });
+        };
 
-        socketIo.on('gameState', (state: RoomState) => {
+        const onGameState = (state: RoomState) => {
             setRoomState(state);
-        });
+        };
 
-        socketIo.on('joined_room', ({ roomId, playerId }: { roomId: string, playerId: string }) => {
-            setPlayerId(playerId);
-            localStorage.setItem('shufle_playerId', playerId);
-        });
+        const onJoinedRoom = ({ roomId: joinedRoomId, playerId: newPlayerId }: { roomId: string, playerId: string }) => {
+            if (joinedRoomId === roomId) {
+                setPlayerId(newPlayerId);
+                localStorage.setItem('shufle_playerId', newPlayerId);
+            }
+        };
 
-        setSocket(socketIo);
+        socket.on('connect', onConnect);
+        socket.on('disconnect', onDisconnect);
+        socket.on('gameState', onGameState);
+        socket.on('joined_room', onJoinedRoom);
+
+        // Handle initial state if already connected
+        if (socket.connected) {
+            onConnect();
+        }
 
         return () => {
-            socketIo.disconnect();
+            socket.off('connect', onConnect);
+            socket.off('disconnect', onDisconnect);
+            socket.off('gameState', onGameState);
+            socket.off('joined_room', onJoinedRoom);
         };
     }, [roomId]);
 
     const joinRoom = useCallback((nickname: string) => {
-        if (!socket) return;
+        if (!socket.connected) {
+            console.warn('Cannot join room: socket not connected');
+            return;
+        }
         localStorage.setItem('shufle_nickname', nickname);
-        // If we already have a playerId, send it
         const storedPlayerId = localStorage.getItem('shufle_playerId');
         socket.emit('join_room', { roomId, nickname, playerId: storedPlayerId });
-    }, [socket, roomId]);
+    }, [roomId]);
+
 
     const startGame = useCallback(() => {
-        if (!socket) return;
+        if (!socket.connected) return;
         socket.emit('start_game');
-    }, [socket]);
+    }, []);
 
     const sendIntent = useCallback((type: 'COMMIT' | 'FOLD' | 'CHECK' | 'PASS', amount: number = 0) => {
-        if (!socket) return;
+        if (!socket.connected) return;
         socket.emit('send_intent', { type, amount });
-    }, [socket]);
+    }, []);
 
     return {
-        socket,
         isConnected,
         roomState,
         playerId,
