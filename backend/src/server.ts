@@ -1,11 +1,18 @@
-import Fastify from 'fastify';
+import Fastify, { FastifyInstance } from 'fastify';
 import socketio from 'fastify-socket.io';
+import { Server } from 'socket.io';
 import Redis from 'ioredis';
 import { createAdapter } from '@socket.io/redis-adapter';
 import { RoomState, Player } from '../../shared/types';
 import { v4 as uuidv4 } from 'uuid';
 import { createActor } from 'xstate';
 import { gameMachine } from './machines/gameMachine';
+
+declare module 'fastify' {
+    interface FastifyInstance {
+        io: Server;
+    }
+}
 
 // Configuration
 const PORT = process.env.PORT ? parseInt(process.env.PORT) : 3001;
@@ -14,19 +21,19 @@ const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
 // Initialize Fastify
 const fastify = Fastify({ logger: true });
 
+// 1. Register the plugin IMMEDIATELY after initializing fastify
+fastify.register(socketio, {
+    cors: {
+        origin: "https://shuffle-frontend-production-511c.up.railway.app",
+        methods: ["GET", "POST"],
+        credentials: true
+    }
+});
+
 fastify.get('/health', async (request, reply) => {
     return { status: 'ok' };
 });
 
-// 1. Register the plugin IMMEDIATELY after initializing fastify
-fastify.register(socketio, {
-    cors: {
-        origin: ["https://shuffle-frontend-production-511c.up.railway.app", "http://localhost:3000"],
-        methods: ["GET", "POST"],
-        credentials: true
-    },
-    transports: ['websocket'] // Force websocket for Railway stability
-});
 
 // Move handlers to a function that takes an individual socket
 const setupSocketHandlers = (socket: any) => {
@@ -116,10 +123,11 @@ fastify.ready((err) => {
     if (err) throw err;
 
     // Use fastify.io instead of a global 'io' variable
-    (fastify as any).io.on('connection', (socket: any) => {
+    fastify.io.on('connection', (socket: any) => {
         setupSocketHandlers(socket);
     });
 });
+
 
 // Store Abstraction
 interface GameStore {
@@ -202,7 +210,7 @@ const syncState = async (roomId: string) => {
     if (!state) return;
 
     // Use fastify.io for state sync
-    const io = (fastify as any).io;
+    const io = fastify.io;
     const sockets = await io.in(roomId).fetchSockets();
 
     for (const socket of sockets) {
@@ -237,8 +245,8 @@ const start = async () => {
         await fastify.listen({ port: PORT, host: '0.0.0.0' });
 
         // 4. Redis Adapter setup AFTER io exists
-        if (pubClient && subClient && (fastify as any).io) {
-            (fastify as any).io.adapter(createAdapter(pubClient, subClient));
+        if (pubClient && subClient && fastify.io) {
+            fastify.io.adapter(createAdapter(pubClient, subClient));
         }
 
         console.log(`🚀 Server confirmed on port ${PORT}`);
