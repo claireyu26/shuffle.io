@@ -260,6 +260,7 @@ const start = async () => {
         const { pubClient, subClient } = await setupInfrastructure();
 
         // 3. Use await fastify.listen inside the start function
+        console.log(`ATTEMPTING TO START SERVER ON PORT ${PORT}`);
         await fastify.listen({ port: PORT, host: '0.0.0.0' });
 
         // 4. Redis Adapter setup ONLY after fastify.io is confirmed to exist
