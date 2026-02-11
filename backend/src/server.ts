@@ -18,24 +18,24 @@ declare module 'fastify' {
 // Initialize Fastify
 const fastify = Fastify({ logger: true });
 
-// 1. Register @fastify/cors FIRST
+// 1. Register @fastify/cors FIRST for Global Security context
 fastify.register(cors, {
-    origin: "https://shuffle-frontend-production-511c.up.railway.app",
+    origin: true, // Mirror request origin
     methods: ["GET", "POST"],
     allowedHeaders: ["Content-Type", "Authorization"],
+    exposedHeaders: ["set-cookie"],
     credentials: true
 });
 
-// 2. Register fastify-socket.io with identical CORS
+// 2. Register fastify-socket.io (Inherent global CORS)
 fastify.register(socketio, {
     path: '/socket.io/',
-    allowEIO3: true,
-    cors: {
-        origin: "https://shuffle-frontend-production-511c.up.railway.app",
-        methods: ["GET", "POST"],
-        allowedHeaders: ["Content-Type", "Authorization"],
-        credentials: true
-    }
+    allowEIO3: true
+    // No cors object here - inherits from @fastify/cors
+});
+
+fastify.get('/', async () => {
+    return 'Hello';
 });
 
 fastify.get('/health', async (request, reply) => {
