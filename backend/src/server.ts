@@ -1,4 +1,5 @@
 import Fastify, { FastifyInstance } from 'fastify';
+import cors from '@fastify/cors';
 import socketio from 'fastify-socket.io';
 import { Server } from 'socket.io';
 import Redis from 'ioredis';
@@ -17,13 +18,22 @@ declare module 'fastify' {
 // Initialize Fastify
 const fastify = Fastify({ logger: true });
 
-// 1. Register fastify-socket.io at the very top
+// 1. Register @fastify/cors FIRST
+fastify.register(cors, {
+    origin: "https://shuffle-frontend-production-511c.up.railway.app",
+    methods: ["GET", "POST"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+    credentials: true
+});
+
+// 2. Register fastify-socket.io with identical CORS
 fastify.register(socketio, {
     path: '/socket.io/',
     allowEIO3: true,
     cors: {
-        origin: true,
+        origin: "https://shuffle-frontend-production-511c.up.railway.app",
         methods: ["GET", "POST"],
+        allowedHeaders: ["Content-Type", "Authorization"],
         credentials: true
     }
 });
