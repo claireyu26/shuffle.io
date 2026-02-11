@@ -18,6 +18,10 @@ declare module 'fastify' {
 // Initialize Fastify
 const fastify = Fastify({ logger: true });
 
+fastify.get('/', async () => {
+    return 'Hello';
+});
+
 // 1. Register @fastify/cors FIRST for Global Security context
 fastify.register(cors, {
     origin: true, // Mirror request origin
@@ -38,9 +42,6 @@ fastify.register(socketio, {
     }
 });
 
-fastify.get('/', async () => {
-    return 'Hello';
-});
 
 fastify.get('/health', async (request, reply) => {
     return { status: 'ok' };
