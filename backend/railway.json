@@ -4,9 +4,12 @@
         "builder": "NIXPACKS"
     },
     "deploy": {
-        "startCommand": "npm start",
+        "startCommand": "npx ts-node src/server.ts",
         "port": 3001,
         "restartPolicyType": "ON_FAILURE",
         "restartPolicyMaxRetries": 10
-    }
+    },
+    "watchPatterns": [
+        "!node_modules/**"
+    ]
 }
