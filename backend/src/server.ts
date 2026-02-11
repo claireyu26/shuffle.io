@@ -14,17 +14,15 @@ declare module 'fastify' {
     }
 }
 
-// Configuration
-const PORT = process.env.PORT ? parseInt(process.env.PORT) : 3001;
-const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
-
 // Initialize Fastify
 const fastify = Fastify({ logger: true });
 
-// 1. Register the plugin IMMEDIATELY after initializing fastify
+// 1. Register fastify-socket.io at the very top
 fastify.register(socketio, {
+    path: '/socket.io/',
+    allowEIO3: true,
     cors: {
-        origin: "https://shuffle-frontend-production-511c.up.railway.app",
+        origin: true,
         methods: ["GET", "POST"],
         credentials: true
     }
@@ -33,6 +31,10 @@ fastify.register(socketio, {
 fastify.get('/health', async (request, reply) => {
     return { status: 'ok' };
 });
+
+// Configuration
+const PORT = process.env.PORT ? parseInt(process.env.PORT) : 3001;
+const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
 
 
 // Move handlers to a function that takes an individual socket
@@ -118,14 +120,14 @@ const setupSocketHandlers = (socket: any) => {
     });
 };
 
-// 2. Wrap socket logic in fastify.ready()
-fastify.ready((err) => {
-    if (err) throw err;
-
-    // Use fastify.io instead of a global 'io' variable
-    fastify.io.on('connection', (socket: any) => {
-        setupSocketHandlers(socket);
-    });
+// 2. Use onReady hook to initialize Socket.io logic
+fastify.addHook('onReady', async () => {
+    if (fastify.io) {
+        fastify.io.on('connection', (socket: any) => {
+            setupSocketHandlers(socket);
+        });
+        console.log('✅ Socket.io initialized via onReady hook');
+    }
 });
 
 
@@ -242,11 +244,13 @@ const start = async () => {
     try {
         const { pubClient, subClient } = await setupInfrastructure();
 
+        // 3. Use await fastify.listen inside the start function
         await fastify.listen({ port: PORT, host: '0.0.0.0' });
 
-        // 4. Redis Adapter setup AFTER io exists
+        // 4. Redis Adapter setup ONLY after fastify.io is confirmed to exist
         if (pubClient && subClient && fastify.io) {
             fastify.io.adapter(createAdapter(pubClient, subClient));
+            console.log('✅ Redis Adapter attached');
         }
 
         console.log(`🚀 Server confirmed on port ${PORT}`);
