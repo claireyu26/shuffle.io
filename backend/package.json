@@ -5,7 +5,7 @@
   "main": "src/server.ts",
   "scripts": {
     "build": "echo 'Build skipped'",
-    "start": "ts-node src/server.ts",
+    "start": "npx ts-node src/server.ts",
     "predev": "npx -y kill-port 3001 || exit 0",
     "dev": "nodemon --exec ts-node src/server.ts"
   },
