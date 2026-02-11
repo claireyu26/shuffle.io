@@ -27,11 +27,15 @@ fastify.register(cors, {
     credentials: true
 });
 
-// 2. Register fastify-socket.io (Inherent global CORS)
+// 2. Register fastify-socket.io
 fastify.register(socketio, {
-    path: '/socket.io/',
-    allowEIO3: true
-    // No cors object here - inherits from @fastify/cors
+    path: '/socket.io',
+    addTrailingSlash: false,
+    cors: {
+        origin: "https://shuffle-frontend-production-511c.up.railway.app",
+        methods: ["GET", "POST"],
+        credentials: true
+    }
 });
 
 fastify.get('/', async () => {
